@@ -1,0 +1,15 @@
+run = "python backend.py"
+modules = ["python-3.10"]
+
+[nix]
+channel = "stable-23.11"
+
+[[ports]]
+localPort = 8000
+externalPort = 80
+
+[env]
+FLASK_ENV = "production"
+FRONTEND_URL = "https://yourdomain.replit.dev"
+PORT = "8000"
+MODEL_PATH = "./model_ml"
