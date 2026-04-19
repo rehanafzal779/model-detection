@@ -1,0 +1,51 @@
+# Git
+.git
+.gitignore
+
+# Node/Frontend
+node_modules/
+npm-debug.log
+build/
+dist/
+package-lock.json
+.next/
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Model files (optional - comment out if needed for deployment)
+# model_ml/
+# *.pt
+# *.onnx
+
+# Misc
+README.md
+docs/
+tests/
+.github/
