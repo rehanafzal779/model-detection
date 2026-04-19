@@ -1,6 +1,5 @@
 {
     "installCommand": "npm ci",
     "buildCommand": "npm run build",
-    "outputDirectory": "build",
-    "nodeVersion": "20.x"
+    "outputDirectory": "build"
 }
