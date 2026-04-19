@@ -14,11 +14,11 @@ interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
 
-// Dynamic API URL - connect to Django backend
+// Dynamic API URL - connect to Railway backend
 const getApiBaseUrl = () => {
   if (import.meta.env.VITE_API_URL) return import.meta.env.VITE_API_URL;
-  // Point to Django backend at http://127.0.0.1:8000
-  return 'http://127.0.0.1:8000/api';
+  // Point to Railway backend in production
+  return 'https://web-production-e63f1.up.railway.app/api';
 };
 
 const API_BASE_URL = getApiBaseUrl();
