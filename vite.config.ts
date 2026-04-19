@@ -1,6 +1,6 @@
 
   import { defineConfig } from 'vite';
-  import react from '@vitejs/plugin-react-swc';
+  import react from '@vitejs/plugin-react';
   import tailwindcss from '@tailwindcss/vite';
   import path from 'path';
 
@@ -15,17 +15,6 @@
     build: {
       target: 'esnext',
       outDir: 'build',
-      rollupOptions: {
-        output: {
-          manualChunks: undefined,
-        },
-      },
-      commonjsOptions: {
-        include: [/node_modules/],
-      },
-    },
-    optimizeDeps: {
-      include: ['react-router-dom'],
     },
     publicDir: 'public',
     server: {
