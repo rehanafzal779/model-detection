@@ -42,6 +42,62 @@
             margin-bottom: 30px;
         }
         
+        .api-config {
+            margin-bottom: 20px;
+            padding: 12px;
+            border: 1px solid #e5e7eb;
+            border-radius: 8px;
+            background: #fafbff;
+        }
+        
+        .api-config label {
+            display: block;
+            font-size: 13px;
+            color: #4b5563;
+            margin-bottom: 6px;
+            font-weight: 600;
+        }
+        
+        .api-row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+        }
+        
+        .api-input {
+            flex: 1;
+            padding: 9px 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 14px;
+            outline: none;
+        }
+        
+        .api-input:focus {
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.15);
+        }
+        
+        .status-pill {
+            display: inline-block;
+            margin-top: 8px;
+            font-size: 12px;
+            padding: 4px 8px;
+            border-radius: 999px;
+            background: #f3f4f6;
+            color: #374151;
+        }
+        
+        .status-pill.ok {
+            background: #dcfce7;
+            color: #166534;
+        }
+        
+        .status-pill.fail {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+        
         .upload-area {
             border: 3px dashed #667eea;
             border-radius: 8px;
@@ -183,12 +239,29 @@
             border-radius: 8px;
             margin-top: 20px;
         }
+        
+        #annotatedPreview {
+            max-width: 100%;
+            height: auto;
+            border-radius: 8px;
+            margin-top: 20px;
+            display: none;
+        }
     </style>
 </head>
 
 <body>
     <div class="container">
         <h1>🤖 AI Waste Detection Tester</h1>
+
+        <div class="api-config">
+            <label for="backendUrl">Backend URL</label>
+            <div class="api-row">
+                <input id="backendUrl" class="api-input" type="text" value="http://127.0.0.1:10000" />
+                <button class="btn" id="checkBackendBtn">Check</button>
+            </div>
+            <span class="status-pill" id="backendStatus">Not checked</span>
+        </div>
 
         <div class="upload-section">
             <div class="upload-area" id="uploadArea">
@@ -209,6 +282,7 @@
         <div class="error" id="error"></div>
 
         <canvas id="canvas"></canvas>
+        <img id="annotatedPreview" alt="Annotated detection output">
 
         <div class="results" id="results">
             <h3 style="margin-bottom: 15px; color: #333;">✅ Detection Results</h3>
@@ -225,6 +299,56 @@
         const resultsList = document.getElementById('resultsList');
         const errorDiv = document.getElementById('error');
         const canvas = document.getElementById('canvas');
+        const annotatedPreview = document.getElementById('annotatedPreview');
+        const backendUrlInput = document.getElementById('backendUrl');
+        const checkBackendBtn = document.getElementById('checkBackendBtn');
+        const backendStatus = document.getElementById('backendStatus');
+
+        const savedUrl = localStorage.getItem('model_tester_backend_url');
+        if (savedUrl) {
+            backendUrlInput.value = savedUrl;
+        }
+
+        function getBackendUrl() {
+            return backendUrlInput.value.trim().replace(/\/$/, '');
+        }
+
+        function getInferenceEndpoint(baseUrl) {
+            return `${baseUrl}/api/inference/`;
+        }
+
+        async function checkBackend() {
+            const baseUrl = getBackendUrl();
+            if (!baseUrl) {
+                backendStatus.textContent = 'Invalid URL';
+                backendStatus.className = 'status-pill fail';
+                return;
+            }
+
+            backendStatus.textContent = 'Checking...';
+            backendStatus.className = 'status-pill';
+
+            try {
+                const endpoint = getInferenceEndpoint(baseUrl);
+                const res = await fetch(endpoint, {
+                    method: 'OPTIONS'
+                });
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}`);
+                }
+
+                backendStatus.textContent = 'Online (inference endpoint ready)';
+                backendStatus.className = 'status-pill ok';
+            } catch (err) {
+                backendStatus.textContent = 'Offline, wrong URL, or CORS blocked';
+                backendStatus.className = 'status-pill fail';
+            }
+        }
+
+        checkBackendBtn.addEventListener('click', checkBackend);
+        backendUrlInput.addEventListener('change', () => {
+            localStorage.setItem('model_tester_backend_url', getBackendUrl());
+        });
 
         // Drag and drop
         uploadArea.addEventListener('dragover', (e) => {
@@ -261,6 +385,7 @@
                 results.classList.remove('show');
                 errorDiv.classList.remove('show');
                 canvas.style.display = 'none';
+                annotatedPreview.style.display = 'none';
 
                 // Send to backend
                 sendToBackend(file);
@@ -273,10 +398,14 @@
             results.classList.remove('show');
             errorDiv.classList.remove('show');
 
+            const baseUrl = getBackendUrl();
+            localStorage.setItem('model_tester_backend_url', baseUrl);
+            const endpoint = getInferenceEndpoint(baseUrl);
+
             const formData = new FormData();
             formData.append('image', file);
 
-            fetch('http://localhost:5000/api/detect', {
+            fetch(endpoint, {
                     method: 'POST',
                     body: formData
                 })
@@ -285,28 +414,78 @@
                     loading.classList.remove('show');
 
                     if (data.status === 'success') {
-                        displayResults(data.detections, file);
+                        displayResults(data.detections || [], file, data.annotated_image_base64 || '');
                     } else {
                         showError(data.error || 'Detection failed');
                     }
                 })
                 .catch(error => {
                     loading.classList.remove('show');
-                    showError('Error: ' + error.message + '. Make sure backend is running at http://localhost:5000');
+                    showError('Error: ' + error.message + '. Make sure backend is running and reachable at ' + baseUrl);
                 });
         }
 
-        function displayResults(detections, file) {
+        function normalizeDetection(det) {
+            const confidence = Number(
+                det.confidence || det.conf || det.score || 0
+            );
+
+            const className = String(
+                det.class_name || det.label || det.name || det.class || det.class_id || 'Unknown'
+            );
+
+            let x1 = Number(det.x1);
+            let y1 = Number(det.y1);
+            let x2 = Number(det.x2);
+            let y2 = Number(det.y2);
+
+            if ([x1, y1, x2, y2].some(Number.isNaN) && Array.isArray(det.box) && det.box.length >= 4) {
+                x1 = Number(det.box[0]);
+                y1 = Number(det.box[1]);
+                x2 = Number(det.box[2]);
+                y2 = Number(det.box[3]);
+            }
+
+            // Some APIs return bbox as [x, y, width, height].
+            if ([x1, y1, x2, y2].some(Number.isNaN) && Array.isArray(det.bbox) && det.bbox.length >= 4) {
+                x1 = Number(det.bbox[0]);
+                y1 = Number(det.bbox[1]);
+                x2 = Number(det.bbox[0]) + Number(det.bbox[2]);
+                y2 = Number(det.bbox[1]) + Number(det.bbox[3]);
+            }
+
+            // Some APIs return bbox as an object: {x1, y1, x2, y2}.
+            if ([x1, y1, x2, y2].some(Number.isNaN) && det.bbox && typeof det.bbox === 'object' && !Array.isArray(det.bbox)) {
+                x1 = Number(det.bbox.x1);
+                y1 = Number(det.bbox.y1);
+                x2 = Number(det.bbox.x2);
+                y2 = Number(det.bbox.y2);
+            }
+
+            return {
+                class: className,
+                confidence: Number.isFinite(confidence) ? confidence : 0,
+                x1,
+                y1,
+                x2,
+                y2
+            };
+        }
+
+        function displayResults(detections, file, annotatedImageBase64) {
+            const normalized = detections.map(normalizeDetection);
+
             // Display results list
             resultsList.innerHTML = '';
-            detections.forEach((det, idx) => {
-                const item = document.createElement('div');
-                item.className = 'result-item';
-                item.innerHTML = `
+            normalized.forEach((det, idx) => {
+                        const coordsValid = [det.x1, det.y1, det.x2, det.y2].every(Number.isFinite);
+                        const item = document.createElement('div');
+                        item.className = 'result-item';
+                        item.innerHTML = `
                     <strong>#${idx + 1}</strong> ${det.class}
                     <span class="confidence">${(det.confidence * 100).toFixed(1)}%</span>
                     <div style="margin-top: 5px; font-size: 12px; color: #666;">
-                        Position: X(${Math.round(det.x1)}-${Math.round(det.x2)}) Y(${Math.round(det.y1)}-${Math.round(det.y2)})
+                        Position: ${coordsValid ? `X(${Math.round(det.x1)}-${Math.round(det.x2)}) Y(${Math.round(det.y1)}-${Math.round(det.y2)})` : 'Not provided by API'}
                     </div>
                 `;
                 resultsList.appendChild(item);
@@ -314,8 +493,15 @@
 
             results.classList.add('show');
 
-            // Draw bounding boxes on canvas
-            drawDetectionsOnImage(file, detections);
+            if (annotatedImageBase64 && typeof annotatedImageBase64 === 'string' && annotatedImageBase64.startsWith('data:image/')) {
+                annotatedPreview.src = annotatedImageBase64;
+                annotatedPreview.style.display = 'block';
+                canvas.style.display = 'none';
+                return;
+            }
+
+            // Draw bounding boxes on canvas when API does not provide an annotated image.
+            drawDetectionsOnImage(file, normalized);
         }
 
         function drawDetectionsOnImage(file, detections) {
@@ -334,6 +520,10 @@
                     const colors = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8', '#F7DC6F', '#BB8FCE', '#85C1E2'];
 
                     detections.forEach((det, idx) => {
+                        if (![det.x1, det.y1, det.x2, det.y2].every(Number.isFinite)) {
+                            return;
+                        }
+
                         const color = colors[idx % colors.length];
 
                         // Draw box
@@ -369,6 +559,8 @@
             errorDiv.textContent = '❌ ' + message;
             errorDiv.classList.add('show');
         }
+
+        checkBackend();
     </script>
 </body>
 

@@ -11,8 +11,15 @@ import io
 import base64
 import json
 import os
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
+
+# Prevent Windows cp1252 console crashes when logs include non-ASCII symbols.
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(errors='replace')
+if hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(errors='replace')
 
 # Optional imports - will use fallback if not available
 try:
@@ -46,16 +53,26 @@ app = Flask(__name__)
 ENVIRONMENT = os.getenv('FLASK_ENV', 'development')
 FRONTEND_URL = os.getenv('FRONTEND_URL', 'http://localhost:5173')
 PORT = int(os.getenv('PORT', 8000))
+LOCAL_TEST_ORIGINS = [
+    "http://localhost:3000",
+    "http://localhost:5173",
+    "http://localhost:5500",
+    "http://127.0.0.1:3000",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5500",
+]
 
 # Configure CORS for both development and production
 if ENVIRONMENT == 'production':
     allowed_origins = [
         FRONTEND_URL,
         "https://*.vercel.app",
-        "https://*.netlify.app"
+        "https://*.netlify.app",
+        "null",
+        *LOCAL_TEST_ORIGINS,
     ]
 else:
-    allowed_origins = ["http://localhost:3000", "http://localhost:5173", "http://127.0.0.1:3000"]
+    allowed_origins = ["null", *LOCAL_TEST_ORIGINS]
 
 CORS(app, 
      origins=allowed_origins,
@@ -68,13 +85,23 @@ CORS(app,
 @app.after_request
 def after_request(response):
     origin = request.headers.get('Origin')
-    if ENVIRONMENT == 'production':
-        # In production, allow any HTTPS domain (Vercel, Netlify, etc.)
-        if origin and (origin.endswith('.vercel.app') or origin.endswith('.netlify.app') or origin == FRONTEND_URL):
-            response.headers['Access-Control-Allow-Origin'] = origin
-    else:
-        # In development, allow localhost
-        if origin in ['http://localhost:3000', 'http://localhost:5173', 'http://127.0.0.1:3000']:
+    if origin:
+        is_local_origin = (
+            origin == 'null'
+            or origin.startswith('http://localhost:')
+            or origin.startswith('http://127.0.0.1:')
+            or origin.startswith('http://192.168.')
+            or origin.startswith('http://10.')
+            or origin.startswith('http://172.')
+        )
+        is_prod_origin = (
+            origin == FRONTEND_URL
+            or origin.endswith('.vercel.app')
+            or origin.endswith('.netlify.app')
+        )
+
+        # Always allow local origins for easier on-device testing.
+        if is_local_origin or is_prod_origin:
             response.headers['Access-Control-Allow-Origin'] = origin
     response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
     response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS'
@@ -84,6 +111,8 @@ def after_request(response):
 # Configuration
 # Use current directory for model path (models should be in repo root)
 MODEL_PATH = os.getenv('MODEL_PATH', './model_ml')
+PT_MODEL_PATH = os.getenv('PT_MODEL_PATH', '').strip()
+PT_ONLY_MODE = os.getenv('PT_ONLY_MODE', '1') == '1'
 DEVICE = "cuda" if (TORCH_AVAILABLE and torch.cuda.is_available()) else "cpu"
 MODEL = None
 ORT_SESSION = None
@@ -110,20 +139,28 @@ def load_model():
             print("🔄 Attempting to load .pt model with ultralytics...")
             from ultralytics import YOLO
             
-            # Priority order - model_ml first, then other options
-            app_backend_paths = [
-                rf"{MODEL_PATH}\best\best.pt",
-                rf"{MODEL_PATH}\best",
-                MODEL_PATH
-            ]
-            fallback_paths = ["model_ml/best/best.pt", "model_ml/best", "model_ml"]
-            all_paths = app_backend_paths + fallback_paths
+            # Priority order - explicit PT path first, then common local files.
+            pt_candidates = []
+            if PT_MODEL_PATH:
+                pt_candidates.append(Path(PT_MODEL_PATH))
+
+            pt_candidates.extend([
+                Path("neatnow_yolov8_best.pt"),
+                Path("best.pt"),
+                Path("best"),
+                Path(rf"{MODEL_PATH}\best\best.pt"),
+                Path(rf"{MODEL_PATH}\best"),
+                Path(MODEL_PATH),
+                Path("model_ml/best/best.pt"),
+                Path("model_ml/best"),
+                Path("model_ml"),
+            ])
             
-            for model_path in all_paths:
+            for model_path in pt_candidates:
                 try:
                     if Path(model_path).exists():
                         print(f"  📂 Trying: {model_path}")
-                        load_result = YOLO(model_path, task='detect')
+                        load_result = YOLO(str(model_path), task='detect')
                         # Test if it can actually do inference
                         test_img = Image.new('RGB', (640, 640))
                         try:
@@ -143,19 +180,32 @@ def load_model():
                     
         except Exception as yolo_err:
             print(f"⚠️  YOLO loading failed: {yolo_err}")
+
+        if PT_ONLY_MODE:
+            print("⚠️  PT_ONLY_MODE is enabled and .pt model could not be loaded")
+            print("⚠️  Skipping ONNX fallback")
+            MODEL = "mock"
+            return
         
         # Fallback to ONNX
         try:
             print("🔄 Fallback: Attempting ONNX model...")
             if ONNX_AVAILABLE and NUMPY_AVAILABLE:
                 providers = ['CPUExecutionProvider']
-                if Path("neatnow_yolov8_best.onnx").exists():
-                    ORT_SESSION = ort.InferenceSession("neatnow_yolov8_best.onnx", providers=providers)
+                onnx_candidates = [
+                    Path("neatnow_yolov8_best.onnx"),
+                    Path("public/neatnow_yolov8_best.onnx"),
+                    Path("build/neatnow_yolov8_best.onnx"),
+                ]
+
+                onnx_path = next((str(p) for p in onnx_candidates if p.exists()), None)
+                if onnx_path:
+                    ORT_SESSION = ort.InferenceSession(onnx_path, providers=providers)
                     MODEL = "onnx"
-                    print("✅ ONNX model loaded")
+                    print(f"✅ ONNX model loaded from {onnx_path}")
                     return
                 else:
-                    print(f"⚠️  ONNX file not found")
+                    print(f"⚠️  ONNX file not found in: {[str(p) for p in onnx_candidates]}")
             else:
                 print(f"⚠️  ONNX or NumPy not available (onnx={ONNX_AVAILABLE}, numpy={NUMPY_AVAILABLE})")
         except Exception as onnx_err:

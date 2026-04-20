@@ -19,6 +19,8 @@ let session: ort.InferenceSession | null = null;
 let initializationAttempted = false;
 let initializationFailed = false;
 
+const ONLINE_INFERENCE_URL = 'https://lab-4--t41175390.replit.app/api/inference/';
+
 // Diagnostic function to check model file
 export async function diagnosticCheckModelFile(): Promise<string> {
   const modelUrl = '/neatnow_yolov8_best.onnx';
@@ -328,59 +330,93 @@ export function drawDetectionsOnImage(
   });
 }
 
-// Main detection function
+function normalizeApiDetection(det: any): Detection | null {
+  const className = String(
+    det?.class_name ?? det?.class ?? det?.label ?? det?.name ?? 'Unknown'
+  );
+
+  const confidence = Number(det?.confidence ?? det?.conf ?? det?.score ?? 0);
+
+  let x1 = Number(det?.x1);
+  let y1 = Number(det?.y1);
+  let x2 = Number(det?.x2);
+  let y2 = Number(det?.y2);
+
+  // Supports bbox object format: {x1, y1, x2, y2}
+  if ([x1, y1, x2, y2].some(Number.isNaN) && det?.bbox && typeof det.bbox === 'object' && !Array.isArray(det.bbox)) {
+    x1 = Number(det.bbox.x1);
+    y1 = Number(det.bbox.y1);
+    x2 = Number(det.bbox.x2);
+    y2 = Number(det.bbox.y2);
+  }
+
+  // Supports bbox array format: [x, y, width, height]
+  if ([x1, y1, x2, y2].some(Number.isNaN) && Array.isArray(det?.bbox) && det.bbox.length >= 4) {
+    x1 = Number(det.bbox[0]);
+    y1 = Number(det.bbox[1]);
+    x2 = Number(det.bbox[0]) + Number(det.bbox[2]);
+    y2 = Number(det.bbox[1]) + Number(det.bbox[3]);
+  }
+
+  if (![x1, y1, x2, y2].every(Number.isFinite)) {
+    return null;
+  }
+
+  return {
+    class: className,
+    confidence: Number.isFinite(confidence) ? confidence : 0,
+    x1,
+    y1,
+    x2,
+    y2,
+  };
+}
+
+async function imageSrcToBlob(imageSrc: string): Promise<Blob> {
+  const response = await fetch(imageSrc);
+  if (!response.ok) {
+    throw new Error(`Failed to load image: ${response.status} ${response.statusText}`);
+  }
+  return await response.blob();
+}
+
+// Main detection function (online API)
 export async function detectObjects(imageSrc: string): Promise<Detection[]> {
   try {
-    console.log('🚀 Starting object detection...');
-    console.log('🌐 Browser capabilities:');
-    console.log('   WebAssembly:', typeof WebAssembly !== 'undefined');
-    console.log('   SharedArrayBuffer:', typeof SharedArrayBuffer !== 'undefined');
-    
-    await initializeSession();
-    
-    if (!session) {
-      throw new Error('Failed to initialize ONNX session');
+    console.log('🚀 Starting online object detection...');
+
+    const blob = await imageSrcToBlob(imageSrc);
+    const formData = new FormData();
+    formData.append('image', blob, 'image.jpg');
+
+    const response = await fetch(ONLINE_INFERENCE_URL, {
+      method: 'POST',
+      body: formData,
+      headers: {
+        Accept: 'application/json',
+      },
+    });
+
+    const payload = await response.json();
+
+    if (!response.ok) {
+      throw new Error(payload?.error || `HTTP ${response.status}`);
     }
-    
-    console.log('📸 Preprocessing image...');
-    // Preprocess image
-    const { data, originalWidth, originalHeight } = await preprocessImage(imageSrc);
-    console.log(`   Image size: ${originalWidth}x${originalHeight}`);
-    console.log(`   Tensor shape: [1, 3, 640, 640]`);
-    
-    // Create input tensor (1, 3, 640, 640)
-    const inputTensor = new ort.Tensor('float32', data, [1, 3, 640, 640]);
-    
-    console.log('🧠 Running inference...');
-    // Run inference
-    const feeds = { images: inputTensor };
-    const results = await session.run(feeds);
-    
-    console.log('📊 Inference complete. Results:', Object.keys(results));
-    
-    // Get output (typically named 'output0' or 'output')
-    const output = results.output0 || results.output;
-    if (!output) {
-      console.error('❌ No output found. Available keys:', Object.keys(results));
-      throw new Error('Model output not found. Expected "output0" or "output"');
+
+    if (payload?.status !== 'success' || !Array.isArray(payload?.detections)) {
+      throw new Error('Invalid API response format');
     }
-    
-    const outputData = output.data as Float32Array;
-    
-    console.log('📈 Post-processing results...');
-    // Post-process
-    const detections = postprocessOutput(outputData, originalWidth, originalHeight, 0.5);
-    
+
+    const detections = payload.detections
+      .map((det: any) => normalizeApiDetection(det))
+      .filter((det: Detection | null): det is Detection => det !== null)
+      .sort((a: Detection, b: Detection) => b.confidence - a.confidence);
+
     console.log(`✅ Detection complete: ${detections.length} objects found`);
     return detections;
   } catch (error: any) {
     console.error('❌ Detection error:', error);
-    
-    // Include diagnostic information in error
-    const diagnostics = await diagnosticCheckModelFile();
-    console.error('📋 Diagnostic info:\n', diagnostics);
-    
-    throw new Error(`AI Detection failed: ${error.message}\n\nDiagnostics: ${diagnostics}`);
+    throw new Error(`AI Detection failed: ${error.message}`);
   }
 }
 
