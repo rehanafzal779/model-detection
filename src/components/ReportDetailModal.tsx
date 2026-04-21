@@ -4,7 +4,7 @@ import { Report, ReportStatus } from '../types';
 import type { Worker } from '../types/worker';
 import workerService from '../services/workerService';
 import { mapWorkerFromBackend } from '../types/worker';
-import { detectObjects, drawDetectionsOnImage, Detection } from '../services/aiDetectionServiceSimplified';
+import { detectObjects, drawDetectionsOnImage, Detection } from '../services/aiDetectionService';
 import { DetectionResultsModal } from './DetectionResultsModal';
 
 interface ReportDetailModalProps {
